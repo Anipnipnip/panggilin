@@ -44,24 +44,28 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	// Batasi ukuran request body untuk mencegah resource exhaustion (DoS)
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
 
+	var status = http.StatusOK
+	var respBody = `{"status":"received"}`
+	var errorMessage = ""
+
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			log.Printf("[INGEST_WARN] Request body melebihi batas maksimum %d bytes dari %s", h.maxBodyBytes, r.RemoteAddr)
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "Payload too large. Exceeds maximum allowed size.")
-			return
+			status = http.StatusRequestEntityTooLarge
+			errorMessage = "Payload too large. Exceeds maximum allowed size."
+		} else {
+			status = http.StatusBadRequest
+			errorMessage = "Failed to read request body."
 		}
-		log.Printf("[INGEST_ERROR] Gagal membaca request body: %v", err)
-		writeJSONError(w, http.StatusBadRequest, "Failed to read request body.")
-		return
+	} else if len(bodyBytes) == 0 || !json.Valid(bodyBytes) {
+		status = http.StatusBadRequest
+		errorMessage = "Invalid JSON payload."
 	}
 
-	// Validasi bahwa body merupakan format JSON yang valid
-	if len(bodyBytes) == 0 || !json.Valid(bodyBytes) {
-		log.Printf("[INGEST_WARN] Payload bukan JSON yang valid dari %s", r.RemoteAddr)
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON payload.")
-		return
+	if errorMessage != "" {
+		errJSON, _ := json.Marshal(map[string]string{"error": errorMessage})
+		respBody = string(errJSON)
 	}
 
 	now := time.Now().UTC()
@@ -89,8 +93,8 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 		Payload:        string(bodyBytes),
 		RemoteAddr:     r.RemoteAddr,
 		ContentLength:  int64(len(bodyBytes)),
-		ResponseStatus: http.StatusOK,
-		ResponseBody:   `{"status":"received"}`,
+		ResponseStatus: status,
+		ResponseBody:   respBody,
 		DurationMs:     durationMs,
 		ReceivedAt:     now,
 	}
@@ -99,12 +103,10 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	if h.repo != nil {
 		if err := h.repo.Insert(r.Context(), event); err != nil {
 			log.Printf("[INGEST_ERROR] Gagal menyimpan webhook ke database: %v", err)
-			writeJSONError(w, http.StatusInternalServerError, "Failed to persist webhook event.")
-			return
 		}
 	}
 
-	// Siarkan event baru ke koneksi SSE realtime
+	// Siarkan event baru ke koneksi SSE realtime agar muncul di dashboard
 	if h.broker != nil {
 		h.broker.Broadcast("new_webhook", EventSummary{
 			ID:             event.ID,
@@ -115,6 +117,15 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 			ContentLength:  event.ContentLength,
 			ReceivedAt:     event.ReceivedAt,
 		})
+	}
+
+	// Jika request error, kirim respons error yang sesuai
+	if status != http.StatusOK {
+		log.Printf("[INGEST_WARN] Status: %d | Path: %s | RemoteAddr: %s | Error: %s", status, r.URL.Path, r.RemoteAddr, errorMessage)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(respBody))
+		return
 	}
 
 	log.Printf("[INGEST_SUCCESS] ID: %s | Method: %s | Path: %s | RemoteAddr: %s | Size: %d bytes | Duration: %dms",

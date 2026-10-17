@@ -36,7 +36,11 @@ func (r *postgresRepository) Insert(ctx context.Context, event *Event) error {
 
 	payloadJSON := []byte(event.Payload)
 	if len(payloadJSON) == 0 || !json.Valid(payloadJSON) {
-		payloadJSON = []byte("{}")
+		wrapped, _ := json.Marshal(map[string]string{
+			"raw":    event.Payload,
+			"_error": "invalid_or_empty_json",
+		})
+		payloadJSON = wrapped
 	}
 
 	query := `
