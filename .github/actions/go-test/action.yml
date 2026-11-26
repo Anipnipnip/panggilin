@@ -1,0 +1,25 @@
+name: Go Test
+description: Setup Go and run project tests
+
+inputs:
+  go-version:
+    description: Go version
+    required: true
+    default: '1.24.0'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with: 
+        go-version: ${{ inputs.go-version }}
+    
+    - name: Download Dependencies
+      shell: bash
+      run: go mod download
+
+    - name: Run tests
+      shell: bash
+      run: go test ./...
+

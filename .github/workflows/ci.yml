@@ -1,0 +1,22 @@
+name: Panggilin CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    steps: 
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Run Go Test
+        uses: ./.github/actions/go-test
+        with:
+          go-version: '1.24.0'
